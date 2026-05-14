@@ -238,3 +238,47 @@ At least one host port is used by multiple Docker Compose services.
 ### Recommendation
 
 Change the duplicated host port so each exposed host port is unique.
+
+## NET-001 - Host ports are available on the local system
+
+**Category:** Networking  
+**Severity:** Blocking  
+**Related requirement:** FR-013
+
+### Description
+
+Checks whether host ports defined in the Docker Compose file are available on the local system.
+
+### Pass condition
+
+All host ports defined in the Docker Compose file are available.
+
+### Fail condition
+
+At least one host port defined in the Docker Compose file is already being used by another process.
+
+### Recommendation
+
+Change the affected host port in the Docker Compose file or stop the process that is using the port.
+
+## ENV-001 - Host ports are available on the local system
+
+**Category:** Networking  
+**Severity:** Blocking  
+**Related requirement:** FR-013
+
+### Description
+
+Checks whether host ports defined in the Docker Compose file are available on the local system.
+
+### Pass condition
+
+All host ports defined in the Docker Compose file are available.
+
+### Fail condition
+
+At least one host port defined in the Docker Compose file is already being used by another process.
+
+### Recommendation
+
+Change the affected host port in the Docker Compose file or stop the process that is using the port.
