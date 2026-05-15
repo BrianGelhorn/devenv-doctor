@@ -32,9 +32,6 @@ CLI command `devenv-doctor check .` that checks a Docker Compose project and the
 - Check if referenced `env_file` files exist.
 - Check parity of keys between `.env` and `.env.example`.
 
-### Report
-
-
 ### Feedback
 
 - Show a binary local readiness status: `Ready`, `Ready with warnings` or `Not Ready`.
