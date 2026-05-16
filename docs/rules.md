@@ -100,7 +100,6 @@ At least one accepted Compose file exists in the target project path.
 
 No accepted Compose file is in the target project path.
 
-
 ### Recommendation
 
 Create a valid Docker Compose file or, if one already exists, rename it to one of the accepted filenames.
