@@ -1,8 +1,12 @@
 from pathlib import Path
 
-import yaml
-from yaml import YAMLError
-
+from devenv_doctor.checks.compose_utils import (
+    find_compose_file,
+    get_build_context,
+    get_build_dockerfile,
+    parse_yaml_file,
+    resolve_build_context,
+)
 from devenv_doctor.core import command_output
 
 
@@ -23,36 +27,11 @@ def check_docker_compose_available() -> tuple[bool, str]:
     return False, output
 
 
-COMPOSE_FILENAMES = (
-    "compose.yaml",
-    "compose.yml",
-    "docker-compose.yml",
-    "docker-compose.yaml",
-)
-
-
-def find_compose_file(project_path: Path) -> Path | None:
-    for filename in COMPOSE_FILENAMES:
-        compose_file = project_path / filename
-
-        if compose_file.is_file():
-            return compose_file
-    return None
-
-
 def check_docker_compose_file_exists(project_path: Path) -> tuple[bool, str]:
     compose_file = find_compose_file(project_path)
     if compose_file is None:
         return False, "No Docker Compose file was found."
     return True, f"Docker Compose file found: {compose_file.name}"
-
-
-def parse_yaml_file(file_path: Path) -> dict | None:
-    try:
-        with file_path.open("r", encoding="utf-8") as file:
-            return yaml.safe_load(file) or {}
-    except YAMLError:
-        return None
 
 
 def check_docker_compose_yaml_syntax(project_path: Path) -> tuple[bool, str]:
@@ -123,16 +102,6 @@ def check_docker_compose_valid_build_or_image(project_path: Path) -> tuple[bool,
     return True, "All services have either build or image tag."
 
 
-def get_build_context(build_config: object) -> str | None:
-    if isinstance(build_config, str):
-        return build_config
-    if isinstance(build_config, dict):
-        context = build_config.get("context", ".")
-        if isinstance(context, str):
-            return context
-    return None
-
-
 def check_docker_compose_build_contexts(project_path: Path) -> tuple[bool, str]:
     compose_file = find_compose_file(project_path)
     # This should not run since the check_docker_compose_file_exists function
@@ -157,11 +126,7 @@ def check_docker_compose_build_contexts(project_path: Path) -> tuple[bool, str]:
             invalid_build_contexts.append(f"{service_name} (invalid build context)")
             continue
 
-        context_path = Path(context)
-        if context_path.is_absolute():
-            full_build_context = context_path
-        else:
-            full_build_context = compose_file.parent / context_path
+        full_build_context = resolve_build_context(compose_file, context)
 
         if not full_build_context.is_dir():
             invalid_build_contexts.append(f"{service_name} ({context})")
@@ -171,3 +136,43 @@ def check_docker_compose_build_contexts(project_path: Path) -> tuple[bool, str]:
         return False, f"The following build contexts do not exist: {invalid_contexts}."
 
     return True, "All defined build contexts exist."
+
+
+def check_docker_compose_build_contexts_dockerfiles(
+    project_path: Path,
+) -> tuple[bool, str]:
+    compose_file = find_compose_file(project_path)
+    # This should not run since the check_docker_compose_file_exists function
+    # should be called before.
+    if compose_file is None:
+        return False, "No Docker Compose file was found."
+
+    parsed_yaml = parse_yaml_file(compose_file)
+
+    # This should not run since the check_docker_compose_yaml_syntax function
+    # should be called before.
+    if parsed_yaml is None:
+        return False, "Docker Compose file YAML has syntax errors."
+
+    missing_dockerfiles: list[str] = []
+    for service_name, service_config in parsed_yaml["services"].items():
+        if not isinstance(service_config, dict) or "build" not in service_config:
+            continue
+
+        context = get_build_context(service_config["build"])
+        dockerfile = get_build_dockerfile(service_config["build"])
+        if context is None or dockerfile is None:
+            continue
+
+        dockerfile_path = resolve_build_context(compose_file, context) / dockerfile
+        if not dockerfile_path.is_file():
+            missing_dockerfiles.append(f"{service_name} ({dockerfile_path})")
+
+    if missing_dockerfiles:
+        missing = ", ".join(missing_dockerfiles)
+        return (
+            False,
+            f"The following build contexts do not have a Dockerfile: {missing}.",
+        )
+
+    return True, "All defined build contexts have a Dockerfile."
