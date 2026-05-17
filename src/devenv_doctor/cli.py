@@ -18,7 +18,12 @@ from devenv_doctor.checks.docker import (
     check_docker_cli_installed,
     check_docker_daemon_accessible,
 )
-from devenv_doctor.checks.environment import check_env_example_exists, has_env_file
+from devenv_doctor.checks.environment import (
+    check_env_example_exists,
+    check_env_variables_match,
+    has_env_example_file,
+    has_env_file,
+)
 
 app = typer.Typer(
     name="devenv-doctor",
@@ -79,6 +84,10 @@ def check(
         (
             "Environment example",
             lambda: check_env_example_exists(project_path),
+        ),
+        (
+            "Environment variables",
+            lambda: check_env_variables_match(project_path),
         ),
     ]
 
@@ -170,6 +179,17 @@ def check(
             failed += 1
             typer.echo(f"[FAIL] {name}: skipped because .env file was not found.")
             continue
+        if name == "Environment variables":
+            if not has_env_file(project_path):
+                failed += 1
+                typer.echo(f"[FAIL] {name}: skipped because .env file was not found.")
+                continue
+            if not has_env_example_file(project_path):
+                failed += 1
+                typer.echo(
+                    f"[FAIL] {name}: skipped because .env.example file was not found."
+                )
+                continue
 
         ok, message = run_check()
 

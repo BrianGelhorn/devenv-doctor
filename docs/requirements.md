@@ -22,7 +22,7 @@
 - FR-018: The CLI must return exit code `1` if blocking issues are found.
 - FR-019: The CLI must return exit code `2` if the tool fails to execute properly.
 - FR-020: The CLI must detect and notify if the permissions are not enough to check the socket of Docker or scan ports. ✅
-- FR-021: The CLI must validate the parity between `.env` and `.env.example`
+- FR-021: The CLI must validate the parity between `.env` and `.env.example` ✅
 - FR-022: The CLI must be able to generate a machine-readable report file.
 - FR-023: The CLI must be able to run only the specified checks by the developer.
 - FR-024: The CLI must be able to specify a custom Docker Compose file to run the analysis with.
