@@ -262,10 +262,10 @@ def test_check_command_exits_2_when_custom_compose_file_is_missing(
 
 
 def test_check_command_exits_2_when_compose_file_path_is_not_provided(tmp_path):
-    result = runner.invoke(cli.app, ["check", str(tmp_path), "--compose"])
+    result = runner.invoke(cli.app, ["check", str(tmp_path), "--compose"], color=False)
 
     assert result.exit_code == 2
-    assert "--compose" in result.output
+    assert "Option '--compose' requires an argument." in result.output
 
 
 def test_check_command_runs_only_selected_checks(monkeypatch, tmp_path):
