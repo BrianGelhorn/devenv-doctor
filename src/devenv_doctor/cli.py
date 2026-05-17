@@ -1,31 +1,9 @@
 import json
-from collections.abc import Callable
 from pathlib import Path
 
 import typer
 
-from devenv_doctor.checks.compose import (
-    check_docker_compose_available,
-    check_docker_compose_build_contexts,
-    check_docker_compose_build_contexts_dockerfiles,
-    check_docker_compose_duplicated_host_ports,
-    check_docker_compose_file_exists,
-    check_docker_compose_host_ports_available,
-    check_docker_compose_services_section,
-    check_docker_compose_valid_build_or_image,
-    check_docker_compose_yaml_syntax,
-)
-from devenv_doctor.checks.compose_utils import has_build_services
-from devenv_doctor.checks.docker import (
-    check_docker_cli_installed,
-    check_docker_daemon_accessible,
-)
-from devenv_doctor.checks.environment import (
-    check_env_example_exists,
-    check_env_variables_match,
-    has_env_example_file,
-    has_env_file,
-)
+from devenv_doctor.runner import CheckRun, run_checks
 
 app = typer.Typer(
     name="devenv-doctor",
@@ -57,11 +35,7 @@ def _resolve_report_path(project_path: Path, report_arg: str | None) -> Path:
 def _write_report(
     report_path: Path,
     project_path: Path,
-    status: str,
-    exit_code: int,
-    checks: list[dict[str, str]],
-    passed: int,
-    failed: int,
+    run: CheckRun,
 ) -> None:
     if not report_path.parent.is_dir():
         typer.secho(
@@ -73,18 +47,19 @@ def _write_report(
 
     report = {
         "project_path": str(project_path),
-        "status": status,
-        "exit_code": exit_code,
+        "status": run.status,
+        "exit_code": run.exit_code,
         "summary": {
-            "total": len(checks),
-            "passed": passed,
-            "failed": failed,
+            "total": run.total,
+            "passed": run.passed,
+            "failed": run.failed,
+            "skipped": run.skipped,
         },
-        "checks": checks,
+        "checks": [result.to_dict() for result in run.results],
         "errors": [
-            {"check": check["name"], "message": check["message"]}
-            for check in checks
-            if check["status"] in {"fail", "skip"}
+            {"check": result.name, "message": result.message}
+            for result in run.results
+            if result.failed
         ],
         "warnings": [],
         "recommendations": [],
@@ -94,6 +69,15 @@ def _write_report(
         encoding="utf-8",
     )
     typer.echo(f"Report written to {report_path}")
+
+
+def _print_result_line(status: str, name: str, message: str) -> None:
+    if status == "pass":
+        typer.secho(f"[PASS] {name}: {message}", fg="green")
+    elif status == "fail":
+        typer.secho(f"[FAIL] {name}: {message}", fg="red")
+    else:
+        typer.echo(f"[SKIP] {name}: {message}")
 
 
 @app.command(
@@ -117,219 +101,30 @@ def check(
     ),
 ) -> None:
     """Run the development environment checks."""
-    checks: list[tuple[str, Callable[[], tuple[bool, str]]]] = [
-        ("Docker CLI", lambda: check_docker_cli_installed()),
-        ("Docker daemon", lambda: check_docker_daemon_accessible()),
-        ("Docker Compose", lambda: check_docker_compose_available()),
-        ("Compose file", lambda: check_docker_compose_file_exists(project_path)),
-        ("Compose YAML", lambda: check_docker_compose_yaml_syntax(project_path)),
-        (
-            "Compose services",
-            lambda: check_docker_compose_services_section(project_path),
-        ),
-        (
-            "Compose build",
-            lambda: check_docker_compose_valid_build_or_image(project_path),
-        ),
-        (
-            "Compose build contexts",
-            lambda: check_docker_compose_build_contexts(project_path),
-        ),
-        (
-            "Compose host ports",
-            lambda: check_docker_compose_duplicated_host_ports(project_path),
-        ),
-        (
-            "Host port availability",
-            lambda: check_docker_compose_host_ports_available(project_path),
-        ),
-        (
-            "Compose build context Dockerfiles",
-            lambda: check_docker_compose_build_contexts_dockerfiles(project_path),
-        ),
-        (
-            "Environment example",
-            lambda: check_env_example_exists(project_path),
-        ),
-        (
-            "Environment variables",
-            lambda: check_env_variables_match(project_path),
-        ),
-    ]
-
-    typer.echo(f"Checking {project_path}")
-    # TODO: Implement diferenciation of blocking, warning and recommended issue levels.
-    passed = 0
-    failed = 0
-    check_results: list[dict[str, str]] = []
-    docker_cli_available = True
-    docker_compose_file_exists = True
-    docker_compose_file_syntax_is_valid = True
-    docker_compose_services_section_is_valid = True
     report_path = _resolve_report_path(project_path, ctx.args[0] if ctx.args else None)
 
     if ctx.args and not report:
         typer.secho(f"Unexpected argument: {ctx.args[0]}", fg="red", err=True)
         raise typer.Exit(code=2)
+    if len(ctx.args) > 1:
+        typer.secho(f"Unexpected argument: {ctx.args[1]}", fg="red", err=True)
+        raise typer.Exit(code=2)
 
-    for name, run_check in checks:
-        if name in {"Docker daemon", "Docker Compose"} and not docker_cli_available:
-            failed += 1
-            message = "skipped because Docker CLI is not installed."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if name == "Compose YAML" and not docker_compose_file_exists:
-            failed += 1
-            message = "skipped because Compose file was not found."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if (
-            name
-            in {
-                "Compose services",
-                "Compose build",
-                "Compose build contexts",
-                "Compose host ports",
-                "Host port availability",
-            }
-            and not docker_compose_file_exists
-        ):
-            failed += 1
-            message = "skipped because Compose file was not found."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if (
-            name
-            in {
-                "Compose services",
-                "Compose build",
-                "Compose build contexts",
-                "Compose host ports",
-                "Host port availability",
-            }
-            and not docker_compose_file_syntax_is_valid
-        ):
-            failed += 1
-            message = "skipped because Compose YAML is not valid."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if (
-            name
-            in {
-                "Compose build",
-                "Compose build contexts",
-                "Compose host ports",
-                "Host port availability",
-            }
-            and not docker_compose_services_section_is_valid
-        ):
-            failed += 1
-            message = "skipped because Compose services are not valid."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if name == "Compose build context Dockerfiles":
-            if not docker_compose_file_exists:
-                failed += 1
-                message = "skipped because Compose file was not found."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
-            if not docker_compose_file_syntax_is_valid:
-                failed += 1
-                message = "skipped because Compose YAML is not valid."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
-            if not docker_compose_services_section_is_valid:
-                failed += 1
-                message = "skipped because Compose services are not valid."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
-            if not has_build_services(project_path):
-                failed += 1
-                message = "skipped because no service uses build."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
-        if name == "Environment example" and not has_env_file(project_path):
-            failed += 1
-            message = "skipped because .env file was not found."
-            check_results.append({"name": name, "status": "skip", "message": message})
-            typer.echo(f"[FAIL] {name}: {message}")
-            continue
-        if name == "Environment variables":
-            if not has_env_file(project_path):
-                failed += 1
-                message = "skipped because .env file was not found."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
-            if not has_env_example_file(project_path):
-                failed += 1
-                message = "skipped because .env.example file was not found."
-                check_results.append(
-                    {"name": name, "status": "skip", "message": message}
-                )
-                typer.echo(f"[FAIL] {name}: {message}")
-                continue
+    typer.echo(f"Checking {project_path}")
+    run = run_checks(project_path)
 
-        ok, message = run_check()
-
-        if name == "Docker CLI":
-            docker_cli_available = ok
-
-        if name == "Compose file":
-            docker_compose_file_exists = ok
-
-        if name == "Compose YAML":
-            docker_compose_file_syntax_is_valid = ok
-
-        if name == "Compose services":
-            docker_compose_services_section_is_valid = ok
-
-        if ok:
-            passed += 1
-            check_results.append({"name": name, "status": "pass", "message": message})
-            typer.secho(f"[PASS] {name}: {message}", fg="green")
-        else:
-            failed += 1
-            check_results.append({"name": name, "status": "fail", "message": message})
-            typer.secho(f"[FAIL] {name}: {message}", fg="red")
-
-    total = len(checks)
-    status = "Ready" if failed == 0 else "Not Ready"
+    for result in run.results:
+        _print_result_line(result.status, result.name, result.message)
 
     typer.echo()
-    typer.secho(f"Status: {status}", fg="green" if status == "Ready" else "red")
-    typer.echo(f"Summary: {passed}/{total} passed, {failed} failed.")
+    typer.secho(f"Status: {run.status}", fg="green" if run.status == "Ready" else "red")
+    typer.echo(
+        f"Summary: {run.passed}/{run.total} passed, "
+        f"{run.failed} failed, {run.skipped} skipped."
+    )
 
-    exit_code = 1 if failed else 0
     if report:
-        _write_report(
-            report_path,
-            project_path,
-            status,
-            exit_code,
-            check_results,
-            passed,
-            failed,
-        )
+        _write_report(report_path, project_path, run)
 
-    if failed:
+    if run.failed:
         raise typer.Exit(code=1)

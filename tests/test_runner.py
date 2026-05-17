@@ -1,0 +1,201 @@
+from devenv_doctor import runner
+
+
+def patch_all_checks_passing(monkeypatch):
+    monkeypatch.setattr(runner, "check_docker_cli_installed", lambda: (True, "ok"))
+    monkeypatch.setattr(runner, "check_docker_daemon_accessible", lambda: (True, "ok"))
+    monkeypatch.setattr(runner, "check_docker_compose_available", lambda: (True, "ok"))
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_file_exists",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_yaml_syntax",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_services_section",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_valid_build_or_image",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_build_contexts",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_duplicated_host_ports",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_host_ports_available",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_build_contexts_dockerfiles",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_env_example_exists",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_env_variables_match",
+        lambda project_path: (True, "ok"),
+    )
+    monkeypatch.setattr(runner, "has_build_services", lambda project_path: True)
+    monkeypatch.setattr(runner, "has_env_file", lambda project_path: True)
+    monkeypatch.setattr(runner, "has_env_example_file", lambda project_path: True)
+
+
+def fail_if_called(*args):
+    raise AssertionError("should be skipped")
+
+
+def test_run_checks_returns_structured_results(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+
+    run = runner.run_checks(tmp_path)
+
+    assert run.status == "Ready"
+    assert run.exit_code == 0
+    assert run.total == 13
+    assert run.passed == 13
+    assert run.failed == 0
+    assert run.skipped == 0
+    assert run.results[0] == runner.CheckResult("Docker CLI", "pass", "ok")
+
+
+def test_run_checks_counts_dependency_skips_separately(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+    monkeypatch.setattr(
+        runner,
+        "check_docker_cli_installed",
+        lambda: (False, "Docker CLI is not installed."),
+    )
+    monkeypatch.setattr(runner, "check_docker_daemon_accessible", fail_if_called)
+    monkeypatch.setattr(runner, "check_docker_compose_available", fail_if_called)
+
+    run = runner.run_checks(tmp_path)
+
+    assert run.status == "Not Ready"
+    assert run.exit_code == 1
+    assert run.passed == 10
+    assert run.failed == 1
+    assert run.skipped == 2
+    assert run.results[0] == runner.CheckResult(
+        "Docker CLI",
+        "fail",
+        "Docker CLI is not installed.",
+    )
+    assert run.results[1] == runner.CheckResult(
+        "Docker daemon",
+        "skip",
+        "skipped because Docker CLI is not installed.",
+    )
+
+
+def test_run_checks_does_not_count_compose_dependency_skips_as_failures(
+    monkeypatch,
+    tmp_path,
+):
+    patch_all_checks_passing(monkeypatch)
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_file_exists",
+        lambda project_path: (False, "No Docker Compose file was found."),
+    )
+    monkeypatch.setattr(runner, "check_docker_compose_yaml_syntax", fail_if_called)
+    monkeypatch.setattr(runner, "check_docker_compose_services_section", fail_if_called)
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_valid_build_or_image",
+        fail_if_called,
+    )
+    monkeypatch.setattr(runner, "check_docker_compose_build_contexts", fail_if_called)
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_duplicated_host_ports",
+        fail_if_called,
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_host_ports_available",
+        fail_if_called,
+    )
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_build_contexts_dockerfiles",
+        fail_if_called,
+    )
+
+    run = runner.run_checks(tmp_path)
+
+    assert run.status == "Not Ready"
+    assert run.passed == 5
+    assert run.failed == 1
+    assert run.skipped == 7
+    assert run.results[4] == runner.CheckResult(
+        "Compose YAML",
+        "skip",
+        "skipped because Compose file was not found.",
+    )
+
+
+def test_run_checks_can_be_ready_with_non_blocking_skips(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+    monkeypatch.setattr(runner, "has_build_services", lambda project_path: False)
+    monkeypatch.setattr(
+        runner,
+        "check_docker_compose_build_contexts_dockerfiles",
+        fail_if_called,
+    )
+
+    run = runner.run_checks(tmp_path)
+
+    assert run.status == "Ready"
+    assert run.exit_code == 0
+    assert run.passed == 12
+    assert run.failed == 0
+    assert run.skipped == 1
+    assert run.results[10] == runner.CheckResult(
+        "Compose build context Dockerfiles",
+        "skip",
+        "skipped because no service uses build.",
+    )
+
+
+def test_run_checks_skips_environment_checks_without_env_file(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+    monkeypatch.setattr(runner, "has_env_file", lambda project_path: False)
+    monkeypatch.setattr(runner, "check_env_example_exists", fail_if_called)
+    monkeypatch.setattr(runner, "check_env_variables_match", fail_if_called)
+
+    run = runner.run_checks(tmp_path)
+
+    assert run.status == "Ready"
+    assert run.passed == 11
+    assert run.failed == 0
+    assert run.skipped == 2
+    assert run.results[11] == runner.CheckResult(
+        "Environment example",
+        "skip",
+        "skipped because .env file was not found.",
+    )
+    assert run.results[12] == runner.CheckResult(
+        "Environment variables",
+        "skip",
+        "skipped because .env file was not found.",
+    )
