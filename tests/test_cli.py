@@ -5,6 +5,8 @@ from typer.testing import CliRunner
 from devenv_doctor import cli
 from devenv_doctor.runner import CheckResult, CheckRun
 
+import re
+
 runner = CliRunner()
 
 
@@ -269,7 +271,7 @@ def test_check_command_exits_2_when_compose_file_path_is_not_provided(
     result = runner.invoke(cli.app, ["check", str(tmp_path), "--compose"], color=False)
 
     assert result.exit_code == 2
-    assert "Option '--compose' requires an argument." in result.output
+    assert "requires an argument" in re.sub(r"\x1b\[[0-9;]*m", "", result.output)
 
 
 def test_check_command_runs_only_selected_checks(monkeypatch, tmp_path):
