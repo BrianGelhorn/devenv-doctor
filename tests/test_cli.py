@@ -1,3 +1,5 @@
+import json
+
 from typer.testing import CliRunner
 
 from devenv_doctor import cli
@@ -5,7 +7,7 @@ from devenv_doctor import cli
 runner = CliRunner()
 
 
-def test_check_command_reports_ready_when_all_checks_pass(monkeypatch, tmp_path):
+def patch_all_checks_passing(monkeypatch):
     monkeypatch.setattr(cli, "check_docker_cli_installed", lambda: (True, "ok"))
     monkeypatch.setattr(cli, "check_docker_daemon_accessible", lambda: (True, "ok"))
     monkeypatch.setattr(cli, "check_docker_compose_available", lambda: (True, "ok"))
@@ -63,11 +65,139 @@ def test_check_command_reports_ready_when_all_checks_pass(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(cli, "has_build_services", lambda project_path: True)
 
+
+def test_check_command_reports_ready_when_all_checks_pass(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+
     result = runner.invoke(cli.app, ["check", str(tmp_path)])
 
     assert result.exit_code == 0
     assert "Status: Ready" in result.output
     assert "Summary: 13/13 passed, 0 failed." in result.output
+
+
+def test_check_command_does_not_write_report_without_report_flag(
+    monkeypatch,
+    tmp_path,
+):
+    patch_all_checks_passing(monkeypatch)
+
+    result = runner.invoke(cli.app, ["check", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert not (tmp_path / cli.DEFAULT_REPORT_FILENAME).exists()
+
+
+def test_check_command_writes_default_json_report(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+
+    result = runner.invoke(cli.app, ["check", str(tmp_path), "--report"])
+
+    report_file = tmp_path / cli.DEFAULT_REPORT_FILENAME
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert f"Report written to {report_file}" in result.output
+    assert report["project_path"] == str(tmp_path)
+    assert report["status"] == "Ready"
+    assert report["exit_code"] == 0
+    assert report["summary"] == {"total": 13, "passed": 13, "failed": 0}
+    assert len(report["checks"]) == 13
+    assert report["errors"] == []
+    assert report["warnings"] == []
+    assert report["recommendations"] == []
+
+
+def test_check_command_writes_custom_json_report_name(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+
+    result = runner.invoke(cli.app, ["check", str(tmp_path), "--report", "result.json"])
+
+    report_file = tmp_path / "result.json"
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert f"Report written to {report_file}" in result.output
+    assert report["status"] == "Ready"
+
+
+def test_check_command_writes_custom_json_report_path(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+    report_dir = tmp_path / "reports"
+    report_dir.mkdir()
+    report_file = report_dir / "result.json"
+
+    result = runner.invoke(
+        cli.app,
+        ["check", str(tmp_path), "--report", str(report_file)],
+    )
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert f"Report written to {report_file}" in result.output
+    assert report["status"] == "Ready"
+
+
+def test_check_command_reports_not_ready_in_json_report(monkeypatch, tmp_path):
+    patch_all_checks_passing(monkeypatch)
+    monkeypatch.setattr(
+        cli,
+        "check_docker_compose_file_exists",
+        lambda project_path: (False, "No Docker Compose file was found."),
+    )
+    monkeypatch.setattr(cli, "check_docker_compose_yaml_syntax", fail_if_called)
+    monkeypatch.setattr(cli, "check_docker_compose_services_section", fail_if_called)
+    monkeypatch.setattr(
+        cli,
+        "check_docker_compose_valid_build_or_image",
+        fail_if_called,
+    )
+    monkeypatch.setattr(cli, "check_docker_compose_build_contexts", fail_if_called)
+    monkeypatch.setattr(
+        cli,
+        "check_docker_compose_build_contexts_dockerfiles",
+        fail_if_called,
+    )
+    monkeypatch.setattr(
+        cli,
+        "check_docker_compose_duplicated_host_ports",
+        fail_if_called,
+    )
+    monkeypatch.setattr(
+        cli,
+        "check_docker_compose_host_ports_available",
+        fail_if_called,
+    )
+
+    result = runner.invoke(cli.app, ["check", str(tmp_path), "--report"])
+
+    report_file = tmp_path / cli.DEFAULT_REPORT_FILENAME
+    report = json.loads(report_file.read_text(encoding="utf-8"))
+
+    assert result.exit_code == 1
+    assert report["status"] == "Not Ready"
+    assert report["exit_code"] == 1
+    assert report["summary"] == {"total": 13, "passed": 5, "failed": 8}
+    assert report["errors"][0] == {
+        "check": "Compose file",
+        "message": "No Docker Compose file was found.",
+    }
+
+
+def test_check_command_exits_2_when_report_parent_path_does_not_exist(
+    monkeypatch,
+    tmp_path,
+):
+    patch_all_checks_passing(monkeypatch)
+
+    result = runner.invoke(
+        cli.app,
+        ["check", str(tmp_path), "--report", str(tmp_path / "missing" / "report.json")],
+    )
+
+    assert result.exit_code == 2
+    assert "Report path does not exist" in result.output
+    assert not (tmp_path / "missing" / "report.json").exists()
 
 
 def fail_if_called():
